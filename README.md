@@ -135,16 +135,16 @@ As configurações são salvas automaticamente em `~/.virtualcam/config.json`:
 ```
                    ┌──────────────────────┐
                    │     virtualcam       │
-                   │   (Python script)     │
+                   │   (Python script)    │
                    └──────┬───────────────┘
                           │
-            ┌─────────────┴─────────────┐
-            │                           │
-     ┌──────▼──────┐           ┌────────▼────────┐
+            ┌─────────────┴──────────────┐
+            │                            │
+     ┌──────▼──────┐            ┌────────▼────────┐
      │   Linux      │           │    Windows      │
      │ v4l2loopback │           │ softcam /       │
      │ + ffmpeg     │           │ Unity Capture   │
-     │ (direto)     │           │ + ffmpeg (pipe)  │
+     │ (direto)     │           │ + ffmpeg (pipe) │
      └──────────────┘           └─────────────────┘
 ```
 
