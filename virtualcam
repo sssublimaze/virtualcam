@@ -1,0 +1,858 @@
+#!/usr/bin/env python3
+"""virtualcam - Câmera virtual universal para Linux & Windows"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import random
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Optional
+
+# ────────────────────────────────────────────────────────
+# CONSTANTS
+# ────────────────────────────────────────────────────────
+CONFIG_DIR = Path.home() / ".virtualcam"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi", ".webm", ".gif", ".jpg", ".png")
+IS_LINUX = sys.platform == "linux"
+IS_WIN = sys.platform == "win32"
+
+# ────────────────────────────────────────────────────────
+# ANSI COLORS
+# ────────────────────────────────────────────────────────
+class C:
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RED = "\033[0;31m"
+    GREEN = "\033[0;32m"
+    YELLOW = "\033[1;33m"
+    BLUE = "\033[0;34m"
+    PURPLE = "\033[0;35m"
+    CYAN = "\033[0;36m"
+    WHITE = "\033[1;37m"
+    NC = "\033[0m"
+    CLEAR = "\033[2J\033[H"
+
+# ────────────────────────────────────────────────────────
+# CONFIG
+# ────────────────────────────────────────────────────────
+@dataclass
+class Config:
+    video_dir: str = str(Path.home() / "Videos")
+    device: str = "/dev/video2" if IS_LINUX else "VirtualCam"
+    card_label: str = "VirtualCam"
+    width: int = 720
+    height: int = 1280
+    fps: int = 30
+    loop: bool = True
+    shuffle: bool = False
+    volume: float = 0.0
+    overlay_text: str = ""
+    overlay_pos: str = "bottom"
+
+    def save(self):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(asdict(self), indent=2))
+
+    @classmethod
+    def load(cls) -> Config:
+        if CONFIG_FILE.exists():
+            try:
+                return cls(**json.loads(CONFIG_FILE.read_text()))
+            except Exception:
+                pass
+        return cls()
+
+
+# ────────────────────────────────────────────────────────
+# UI HELPERS  (com suporte a status bar persistente)
+# ────────────────────────────────────────────────────────
+_STATUS_ACTIVE = False
+_STATUS_FOOTER = ""
+_STATUS_LINES = 3  # blank + separator + hotkeys
+
+def _status_redraw():
+    global _STATUS_ACTIVE, _STATUS_FOOTER
+    if _STATUS_ACTIVE:
+        print(f"\n{C.DIM}────────────────────────────────────────────────────{C.NC}")
+        print(f"  {C.BOLD}{C.WHITE}⌨{C.NC}  {C.DIM}Comandos:{C.NC}  {_STATUS_FOOTER}")
+        print(end="", flush=True)
+
+def status_activate(footer):
+    global _STATUS_ACTIVE, _STATUS_FOOTER
+    _STATUS_FOOTER = footer
+    _STATUS_ACTIVE = True
+    _status_redraw()
+
+def status_deactivate():
+    global _STATUS_ACTIVE
+    _STATUS_ACTIVE = False
+
+def _status_msg(icon, color, msg):
+    if _STATUS_ACTIVE:
+        print(f"\r\033[{_STATUS_LINES}A\033[J  {color}{icon}{C.NC}  {msg}")
+        _status_redraw()
+    else:
+        print(f"  {color}{icon}{C.NC}  {msg}")
+
+def info(msg):  _status_msg("ℹ", C.CYAN, msg)
+def ok(msg):    _status_msg("✔", C.GREEN, msg)
+def err(msg):   _status_msg("✘", C.RED, msg)
+def warn(msg):  _status_msg("⚠", C.YELLOW, msg)
+
+def ask(msg):
+    print(f"  {C.CYAN}?{C.NC}  {msg}", end=" ", flush=True)
+
+def dim(msg):
+    print(f"  {C.DIM}{msg}{C.NC}")
+
+def hr():
+    print(f"  {C.DIM}{'─' * 52}{C.NC}")
+
+def section(title, color=C.CYAN):
+    pad = 48 - len(title)
+    print(f"\n  {color}┌─ {C.BOLD}{title}{C.NC} {color}{'─' * max(0, pad)}┐{C.NC}")
+
+def clear():
+    print(C.CLEAR, end="")
+
+# ────────────────────────────────────────────────────────
+# BANNER
+# ────────────────────────────────────────────────────────
+BANNER_LINES = [
+    " _    ___      __              ________              ",
+    "| |  / (_)____/ /___  ______ _/ / ____/___ _____ ___ ",
+    "| | / / / ___/ __/ / / / __`/ / /   / __`/ __`__ \\",
+    "| |/ / / /  / /_/ /_/ / /_/ / / /___/ /_/ / / / / / /",
+    "|___/_/_/   \\__/\\__,_/\\__,_/_/\\____/\\__,_/_/ /_/ /_/ ",
+]
+
+def print_banner():
+    clear()
+    print()
+    for line in BANNER_LINES:
+        print(f"  {C.BLUE}{line}{C.NC}")
+    print(f"  {C.DIM}{C.BLUE}┌──────────────────────────────────────────────────────────┐{C.NC}")
+    print(f"  {C.DIM}{C.BLUE}│{C.NC}  Câmera virtual universal  {C.DIM}  •{C.NC}     by sssublimaze        {C.DIM}{C.BLUE}│{C.NC}")
+    print(f"  {C.DIM}{C.BLUE}└──────────────────────────────────────────────────────────┘{C.NC}")
+    print()
+
+# ────────────────────────────────────────────────────────
+# GRAPHICAL FOLDER PICKER (cross-platform via tkinter)
+# ────────────────────────────────────────────────────────
+def open_folder_dialog(title="Escolha a pasta com seus vídeos", initialdir=None):
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        folder = filedialog.askdirectory(title=title, initialdir=initialdir)
+        root.destroy()
+        return folder if folder else None
+    except Exception:
+        return None
+
+# ────────────────────────────────────────────────────────
+# VIDEO SCANNER
+# ────────────────────────────────────────────────────────
+def scan_videos(directory):
+    videos = []
+    d = Path(directory)
+    if not d.is_dir():
+        return videos
+    for ext in VIDEO_EXTS:
+        videos.extend(d.glob(f"*{ext}"))
+        videos.extend(d.glob(f"*{ext.upper()}"))
+    videos.sort(key=lambda p: p.name.lower())
+    return videos
+
+# ────────────────────────────────────────────────────────
+# FFMPEG FRAME PIPE (used by Windows backend)
+# ────────────────────────────────────────────────────────
+def ffmpeg_pipe_cmd(video, width, height, fps, loop, overlay_text, overlay_pos):
+    vf = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,format=rgb24"
+    if overlay_text:
+        pos_map = {"top": "10:10", "bottom": "10:H-30", "center": "(W-text_w)/2:(H-text_h)/2"}
+        pos = pos_map.get(overlay_pos, "10:H-30")
+        vf += f",drawtext=text='{overlay_text}':fontcolor=white:fontsize=24:x={pos.split(':')[0]}:y={pos.split(':')[1]}"
+    return [
+        "ffmpeg", "-stream_loop", "-1" if loop else "1",
+        "-re", "-i", str(video), "-vf", vf,
+        "-r", str(fps), "-pix_fmt", "rgb24",
+        "-f", "rawvideo", "-", "-loglevel", "warning",
+    ]
+
+# ────────────────────────────────────────────────────────
+# PLATFORM-SPECIFIC BACKENDS
+# ────────────────────────────────────────────────────────
+class VirtualCamBackend:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.proc = None
+
+    def start(self, video): ...
+    def restart(self, video): return self.start(video)
+
+    def stop(self):
+        if self.proc:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+            self.proc = None
+
+    @property
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+
+class LinuxV4L2Backend(VirtualCamBackend):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self._setup_device()
+
+    def _devnum(self, path):
+        m = re.search(r"(\d+)$", path)
+        return m.group(1) if m else "2"
+
+    def _setup_device(self):
+        section("Configurando câmera virtual", C.BLUE)
+        info("Carregando v4l2loopback...")
+        devnum = self._devnum(self.cfg.device)
+        subprocess.run(["sudo", "modprobe", "-r", "v4l2loopback"], capture_output=True)
+        subprocess.run([
+            "sudo", "modprobe", "v4l2loopback",
+            f"video_nr={devnum}",
+            f"card_label={self.cfg.card_label}",
+            "exclusive_caps=1",
+        ])
+        ok(f"Dispositivo: {C.BOLD}{self.cfg.device}{C.NC}")
+        hr()
+
+    def _build_cmd(self, video):
+        w, h = self.cfg.width, self.cfg.height
+        vf = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
+        if self.cfg.overlay_text:
+            pos_map = {"top": "10:10", "bottom": "10:H-30", "center": "(W-text_w)/2:(H-text_h)/2"}
+            pos = pos_map.get(self.cfg.overlay_pos, "10:H-30")
+            vf += f",drawtext=text='{self.cfg.overlay_text}':fontcolor=white:fontsize=24:x={pos.split(':')[0]}:y={pos.split(':')[1]}"
+        return [
+            "ffmpeg", "-stream_loop", "-1" if self.cfg.loop else "1",
+            "-re", "-i", str(video), "-vf", vf,
+            "-r", str(self.cfg.fps), "-pix_fmt", "yuv420p",
+            "-f", "v4l2", self.cfg.device, "-loglevel", "warning",
+        ]
+
+    def start(self, video):
+        self.stop()
+        self.proc = subprocess.Popen(self._build_cmd(video))
+        return True
+
+
+class WindowsBackend(VirtualCamBackend):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.strategy = None
+        self.pipe_proc = None
+        self.send_thread = None
+        self._detect_backend()
+
+    def _detect_backend(self):
+        print()
+        section("Detectando backend", C.YELLOW)
+
+        try:
+            import softcam
+            self.strategy = "softcam"
+            ok(f"softcam {C.DIM}(MIT, nativo, sem OBS){C.NC}")
+            hr(); return
+        except ImportError:
+            pass
+
+        try:
+            import pyvirtualcam
+            import winreg
+            try:
+                k = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT,
+                    "CLSID\\{3D07E3F2-4A0A-48E0-9BD6-37F6CCF8A657}")
+                k.Close()
+                self.strategy = "pyvcam"
+                self.pyvcam_backend = "unitycapture"
+                ok(f"Unity Capture + pyvirtualcam {C.DIM}(MIT, sem OBS){C.NC}")
+                hr(); return
+            except OSError:
+                pass
+            self.strategy = "pyvcam"
+            self.pyvcam_backend = "obs"
+            warn("OBS Virtual Camera detectado (fallback)")
+            hr(); return
+        except ImportError:
+            pass
+
+        self.strategy = None
+        warn("Nenhum backend de câmera virtual encontrado")
+        dim("  Opções recomendadas (sem OBS Studio):")
+        dim(f"    {C.BOLD}1){C.NC} pip install softcam  {C.DIM}+ driver softcam{C.NC}")
+        dim(f"    {C.BOLD}2){C.NC} pip install pyvirtualcam + registrar Unity Capture")
+        hr()
+
+    def _ffmpeg_cmd(self, video):
+        return ffmpeg_pipe_cmd(
+            video, self.cfg.width, self.cfg.height, self.cfg.fps,
+            self.cfg.loop, self.cfg.overlay_text, self.cfg.overlay_pos,
+        )
+
+    def start(self, video):
+        self.stop()
+        return {
+            "softcam": self._start_softcam,
+            "pyvcam": self._start_pyvcam,
+        }.get(self.strategy, self._start_fallback)(video)
+
+    def _start_softcam(self, video):
+        import numpy as np
+        from softcam import camera
+        w, h = self.cfg.width, self.cfg.height
+        self.pipe_proc = subprocess.Popen(
+            self._ffmpeg_cmd(video), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        fsize = w * h * 3
+
+        def _run():
+            try:
+                cam = camera(w, h, self.cfg.fps)
+                cam.wait_for_connection()
+                ok(f"softcam: app conectado em {C.BOLD}{self.cfg.card_label}{C.NC}")
+                while self.pipe_proc and self.pipe_proc.poll() is None:
+                    raw = self.pipe_proc.stdout.read(fsize)
+                    if len(raw) < fsize:
+                        break
+                    cam.send_frame(np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)))
+            except Exception as e:
+                err(f"softcam: {e}")
+
+        self.send_thread = threading.Thread(target=_run, daemon=True)
+        self.send_thread.start()
+        self.proc = self.pipe_proc
+        return True
+
+    def _start_pyvcam(self, video):
+        import numpy as np
+        import pyvirtualcam
+        w, h = self.cfg.width, self.cfg.height
+        self.pipe_proc = subprocess.Popen(
+            self._ffmpeg_cmd(video), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        fsize = w * h * 3
+
+        def _run():
+            try:
+                with pyvirtualcam.Camera(
+                    width=w, height=h, fps=self.cfg.fps,
+                    backend=self.pyvcam_backend, device=self.cfg.card_label,
+                ) as cam:
+                    while self.pipe_proc and self.pipe_proc.poll() is None:
+                        raw = self.pipe_proc.stdout.read(fsize)
+                        if len(raw) < fsize:
+                            break
+                        cam.send(np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)))
+                        cam.sleep_until_next_frame()
+            except Exception as e:
+                err(f"pyvirtualcam: {e}")
+
+        self.send_thread = threading.Thread(target=_run, daemon=True)
+        self.send_thread.start()
+        self.proc = self.pipe_proc
+        return True
+
+    def _start_fallback(self, video):
+        warn("Modo preview: exibindo vídeo em janela (sem câmera virtual)")
+        self.proc = subprocess.Popen([
+            "ffplay", "-window_title", self.cfg.card_label,
+            "-x", str(self.cfg.width), "-y", str(self.cfg.height), str(video)])
+        return True
+
+    def stop(self):
+        if self.pipe_proc:
+            try:
+                self.pipe_proc.terminate()
+                self.pipe_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.pipe_proc.kill()
+            self.pipe_proc = None
+        super().stop()
+
+    def restart(self, video):
+        return self.start(video)
+
+
+# ────────────────────────────────────────────────────────
+# HOTKEY LISTENER  (queue-based, terminal-safe)
+# ────────────────────────────────────────────────────────
+_exit_flag = threading.Event()
+
+class HotkeyListener:
+    """Lê teclas na thread e envia para a queue. A main thread processa."""
+
+    def __init__(self):
+        self.queue = queue.Queue()
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._old_term = None
+        self._fd = None
+        self._pause_request = threading.Event()
+        self._paused = threading.Event()
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+        self._restore_term()
+
+    def pause_term(self):
+        """Restaura terminal para cooked mode (para usar input())."""
+        self._restore_term()
+
+    def resume_term(self):
+        """Re-entra em cbreak mode."""
+        if not IS_WIN:
+            try:
+                self._setup_term()
+            except Exception:
+                pass
+
+    def _restore_term(self):
+        if self._old_term is not None and self._fd is not None:
+            import termios
+            try:
+                termios.tcsetattr(self._fd, termios.TCSANOW, self._old_term)
+            except Exception:
+                pass
+
+    def _setup_term(self):
+        import termios, tty
+        self._fd = sys.stdin.fileno()
+        self._old_term = termios.tcgetattr(self._fd)
+        tty.setcbreak(self._fd)
+
+    def _run(self):
+        if IS_WIN:
+            self._run_windows()
+        else:
+            self._run_unix()
+
+    def _run_unix(self):
+        import select
+        try:
+            self._setup_term()
+        except Exception:
+            pass
+        try:
+            while self._running and not _exit_flag.is_set():
+                r, _, _ = select.select([sys.stdin], [], [], 0.3)
+                if r:
+                    key = sys.stdin.read(1).lower()
+                    self.queue.put(key)
+        finally:
+            self._restore_term()
+
+    def _run_windows(self):
+        import msvcrt
+        while self._running and not _exit_flag.is_set():
+            if msvcrt.kbhit():
+                key = msvcrt.getch().decode("utf-8", errors="replace").lower()
+                self.queue.put(key)
+            else:
+                _exit_flag.wait(0.1)
+
+
+# ────────────────────────────────────────────────────────
+# INTERACTIVE MENUS
+# ────────────────────────────────────────────────────────
+def pick_folder_gui(cfg):
+    """Abre explorador gráfico. Fallback para input() se tkinter falhar."""
+    print()
+    section("Selecionar pasta de vídeos", C.BLUE)
+    dim(f"Pasta atual: {C.BOLD}{cfg.video_dir}{C.NC}")
+    print()
+    folder = open_folder_dialog(initialdir=cfg.video_dir)
+    if folder:
+        cfg.video_dir = folder
+        ok(f"Pasta: {C.BOLD}{cfg.video_dir}{C.NC}")
+        cfg.save()
+        hr()
+        return True
+    # fallback textual
+    warn("Diálogo gráfico cancelado/falhou. Digite o caminho manualmente:")
+    ask("Caminho da pasta:")
+    try:
+        inp = input().strip().strip('"').strip("'")
+        if inp:
+            p = Path(inp).expanduser()
+            if p.is_dir():
+                cfg.video_dir = str(p.resolve())
+                ok(f"Pasta: {C.BOLD}{cfg.video_dir}{C.NC}")
+                cfg.save()
+                hr()
+                return True
+            err("Pasta inválida")
+    except (EOFError, KeyboardInterrupt):
+        pass
+    hr()
+    return False
+
+
+def pick_resolution(cfg):
+    print()
+    section("Resolução da câmera", C.YELLOW)
+    presets = [
+        ("640×480  SD", 640, 480),
+        ("720×1280 Vertical HD", 720, 1280),
+        ("1080×1920 Vertical Full HD", 1080, 1920),
+        ("1280×720  Horizontal HD", 1280, 720),
+        ("1920×1080 Full HD", 1920, 1080),
+        ("3840×2160 4K UHD", 3840, 2160),
+    ]
+    print()
+    for i, (label, *_ ) in enumerate(presets, 1):
+        marker = " ●" if (presets[i-1][1], presets[i-1][2]) == (cfg.width, cfg.height) else ""
+        print(f"  {C.BOLD}{C.WHITE}{i}{C.NC}  {label:<25}{C.DIM}{marker}{C.NC}")
+    print()
+    ask(f"Opção [1-{len(presets)}, Enter=manter, ou WxH custom]:")
+    try:
+        inp = input().strip()
+        if inp:
+            parts = inp.lower().split("x")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                cfg.width, cfg.height = int(parts[0]), int(parts[1])
+            else:
+                idx = int(inp) - 1
+                if 0 <= idx < len(presets):
+                    cfg.width, cfg.height = presets[idx][1], presets[idx][2]
+    except (ValueError, EOFError, KeyboardInterrupt):
+        pass
+    ok(f"Resolução: {C.BOLD}{cfg.width}×{cfg.height}{C.NC}")
+    cfg.save()
+    hr()
+
+
+def pick_fps(cfg):
+    section("FPS da câmera", C.YELLOW)
+    ask(f"FPS [Enter={cfg.fps}]:")
+    try:
+        inp = input().strip()
+        if inp and inp.isdigit():
+            cfg.fps = max(1, min(int(inp), 120))
+    except (EOFError, KeyboardInterrupt):
+        pass
+    ok(f"FPS: {C.BOLD}{cfg.fps}{C.NC}")
+    cfg.save()
+    hr()
+
+
+def list_videos_menu(videos):
+    if not videos:
+        err("Nenhum vídeo encontrado")
+        return None
+    print()
+    for i, v in enumerate(videos, 1):
+        size = v.stat().st_size
+        s = f"{size / 1024 / 1024:.1f}MB" if size > 1024 * 1024 else f"{size / 1024:.0f}KB"
+        print(f"  {C.BOLD}{C.WHITE}{i:2d}{C.NC}  {v.name:<50} {C.DIM}{s}{C.NC}")
+    print()
+    ask(f"Número [1-{len(videos)}, r=aleatório, Enter=1]:")
+    try:
+        inp = input().strip().lower()
+        if inp == "r":
+            return random.choice(videos)
+        if inp:
+            idx = int(inp) - 1
+            if 0 <= idx < len(videos):
+                return videos[idx]
+    except (ValueError, EOFError, KeyboardInterrupt):
+        pass
+    return videos[0]
+
+
+# ────────────────────────────────────────────────────────
+# MAIN APP
+# ────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(
+        description="VirtualCam - Câmera virtual universal",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("-d", "--dir", help="Pasta com vídeos")
+    parser.add_argument("-v", "--video", help="Arquivo de vídeo específico")
+    parser.add_argument("-r", "--resolution", help="Resolução WxH (ex: 1920x1080)")
+    parser.add_argument("--fps", type=int, help="FPS (1-120)")
+    parser.add_argument("--loop", action="store_true", default=None, help="Repetir vídeo")
+    parser.add_argument("--no-loop", action="store_false", dest="loop", help="Não repetir")
+    parser.add_argument("--shuffle", action="store_true", help="Modo aleatório")
+    parser.add_argument("--overlay", help="Texto de overlay na tela")
+    parser.add_argument("--cli", action="store_true", help="Modo CLI (sem menus)")
+    parser.add_argument("--list", action="store_true", help="Listar vídeos e sair")
+    parser.add_argument("--devices", action="store_true", help="Listar dispositivos de vídeo")
+    args = parser.parse_args()
+
+    cfg = Config.load()
+
+    if args.dir:
+        cfg.video_dir = args.dir
+    if args.resolution:
+        parts = args.resolution.lower().split("x")
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            cfg.width, cfg.height = int(parts[0]), int(parts[1])
+    if args.fps:
+        cfg.fps = max(1, min(args.fps, 120))
+    if args.loop is not None:
+        cfg.loop = args.loop
+    if args.shuffle:
+        cfg.shuffle = True
+    if args.overlay:
+        cfg.overlay_text = args.overlay
+
+    if args.list:
+        videos = scan_videos(cfg.video_dir)
+        if not videos:
+            print("Nenhum vídeo encontrado.")
+            return
+        for v in videos:
+            print(v)
+        return
+
+    if args.devices:
+        if IS_LINUX:
+            subprocess.run(["v4l2-ctl", "--list-devices"], check=False)
+        else:
+            subprocess.run(["ffmpeg", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                           stderr=subprocess.STDOUT, check=False)
+        return
+
+    # ── Interactive setup ──
+    print_banner()
+
+    videos = scan_videos(cfg.video_dir)
+    if not videos:
+        err(f"Nenhum vídeo em: {C.BOLD}{cfg.video_dir}{C.NC}")
+        if pick_folder_gui(cfg):
+            videos = scan_videos(cfg.video_dir)
+        if not videos:
+            err("Nenhum vídeo disponível. Encerrando.")
+            sys.exit(1)
+
+    selected = None
+    if args.video:
+        vp = Path(args.video)
+        if vp.is_file():
+            selected = vp
+        else:
+            err(f"Arquivo não encontrado: {args.video}")
+
+    if not selected and not args.cli:
+        pick_resolution(cfg)
+        pick_fps(cfg)
+
+        section("Selecionar vídeo", C.BLUE)
+        ok(f"Pasta: {C.BOLD}{cfg.video_dir}{C.NC}")
+        selected = list_videos_menu(videos)
+        if not selected:
+            err("Nenhum vídeo selecionado.")
+            sys.exit(1)
+
+        ok(f"Vídeo: {C.BOLD}{selected.name}{C.NC}")
+        hr()
+
+        if len(videos) > 1:
+            ask("Modo playlist? [s/N/seq/rand]:")
+            try:
+                pm = input().strip().lower()
+                if pm in ("s", "sim", "seq", "random", "rand", "playlist"):
+                    if pm in ("rand", "random"):
+                        cfg.shuffle = True
+                        random.shuffle(videos)
+                    cfg.loop = True
+            except (EOFError, KeyboardInterrupt):
+                pass
+
+    if not selected:
+        selected = videos[0] if not args.cli else (videos[0] if videos else None)
+        if not selected:
+            err("Nenhum vídeo selecionado.")
+            sys.exit(1)
+
+    cfg.save()
+
+    # ── Backend ──
+    if IS_LINUX:
+        backend = LinuxV4L2Backend(cfg)
+    else:
+        backend = WindowsBackend(cfg)
+
+    # ── Start stream ──
+    print()
+    section("Transmitindo", C.GREEN)
+    print()
+    print(f"  {C.PURPLE}▶{C.NC}  Arquivo:    {C.BOLD}{C.WHITE}{selected.name}{C.NC}")
+    print(f"  {C.YELLOW}⚙{C.NC}  Resolução:  {C.BOLD}{cfg.width}×{cfg.height}{C.NC}")
+    print(f"  {C.GREEN}◉{C.NC}  Dispositivo: {C.BOLD}{cfg.device}{C.NC}")
+    print(f"  {C.CYAN}◎{C.NC}  FPS:        {C.BOLD}{cfg.fps}{C.NC}")
+    print(f"  {C.DIM}  Loop: {'sim' if cfg.loop else 'não'},  Shuffle: {'sim' if cfg.shuffle else 'não'}{C.NC}")
+    print()
+    ok("Câmera virtual ativa!")
+
+    keys = f"{C.BOLD}T{C.NC}rocar"
+    keys += f"  │  {C.BOLD}N{C.NC}ext" if cfg.shuffle else ""
+    keys += f"  │  {C.BOLD}L{C.NC}oop  │  {C.BOLD}P{C.NC}asta  │  {C.BOLD}F{C.NC}PS  │  {C.BOLD}R{C.NC}es  │  {C.BOLD}Q{C.NC}uit"
+    status_activate(keys)
+
+    playlist = list(videos)
+    if cfg.shuffle:
+        random.shuffle(playlist)
+    pl_idx = playlist.index(selected) if selected in playlist else 0
+
+    current_video = selected
+    backend.start(current_video)
+
+    # ── Hotkey dispatcher ──
+    # Estas funções rodam NA MAIN THREAD, onde input() funciona.
+    hk = HotkeyListener()
+
+    def cmd_change_video():
+        nonlocal current_video, pl_idx
+        hk.pause_term()
+        videos_refresh = scan_videos(cfg.video_dir)
+        if not videos_refresh:
+            hk.resume_term(); warn("Nenhum vídeo disponível"); return
+        if cfg.shuffle:
+            next_v = random.choice(videos_refresh)
+        else:
+            clear(); print_banner()
+            section("Trocar vídeo", C.YELLOW)
+            nv = list_videos_menu(videos_refresh)
+            next_v = nv if nv else None
+        hk.resume_term()
+        if next_v is None:
+            return
+        current_video = next_v
+        ok(f"Trocando para: {C.BOLD}{current_video.name}{C.NC}")
+        time.sleep(0.3)
+        backend.restart(current_video)
+
+    def cmd_next_video():
+        nonlocal current_video, pl_idx
+        videos_refresh = scan_videos(cfg.video_dir)
+        if not videos_refresh:
+            return
+        current_video = random.choice(videos_refresh) if cfg.shuffle \
+            else videos_refresh[(pl_idx + 1) % len(videos_refresh)]
+        ok(f"Próximo: {C.BOLD}{current_video.name}{C.NC}")
+        backend.restart(current_video)
+
+    def cmd_toggle_loop():
+        cfg.loop = not cfg.loop
+        cfg.save()
+        ok(f"Loop: {'ativado' if cfg.loop else 'desativado'}")
+
+    def cmd_pick_folder():
+        nonlocal playlist
+        hk.pause_term()
+        clear(); print_banner()
+        if pick_folder_gui(cfg):
+            videos_refresh = scan_videos(cfg.video_dir)
+            if videos_refresh:
+                playlist = list(videos_refresh)
+                if cfg.shuffle:
+                    random.shuffle(playlist)
+                info("Pasta alterada. Pressione T para escolher vídeo.")
+        hk.resume_term()
+
+    def cmd_pick_res():
+        hk.pause_term()
+        clear(); print_banner()
+        pick_resolution(cfg)
+        hk.resume_term()
+        info("Resolução alterada. Troque o vídeo (T) para aplicar.")
+
+    def cmd_pick_fps():
+        hk.pause_term()
+        clear(); print_banner()
+        pick_fps(cfg)
+        hk.resume_term()
+        info("FPS alterado. Troque o vídeo (T) para aplicar.")
+
+    def cmd_quit():
+        _exit_flag.set()
+        hk.stop()
+        backend.stop()
+        print()
+        print(f"  {C.YELLOW}╔══════════════════════════════════════════╗{C.NC}")
+        print(f"  {C.YELLOW}║{C.NC}  {C.PURPLE}▶{C.NC}     VirtualCam encerrado.             {C.YELLOW}║{C.NC}")
+        print(f"  {C.YELLOW}╚══════════════════════════════════════════╝{C.NC}")
+        print()
+        os._exit(0)
+
+    hotkey_map = {
+        "t": cmd_change_video,
+        "n": cmd_next_video,
+        "l": cmd_toggle_loop,
+        "p": cmd_pick_folder,
+        "r": cmd_pick_res,
+        "f": cmd_pick_fps,
+        "q": cmd_quit,
+    }
+
+    def cleanup(*_):
+        _exit_flag.set()
+        hk.stop()
+        backend.stop()
+        os._exit(0)
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
+
+    hk.start()
+
+    # ── Main loop (processa queue + monitora backend) ──
+    try:
+        while not _exit_flag.is_set():
+            # processa hotkeys
+            try:
+                while True:
+                    key = hk.queue.get_nowait()
+                    handler = hotkey_map.get(key)
+                    if handler:
+                        handler()
+            except queue.Empty:
+                pass
+
+            # monitora backend
+            if not backend.alive:
+                if cfg.loop:
+                    videos_refresh = scan_videos(cfg.video_dir)
+                    if videos_refresh:
+                        current_video = random.choice(videos_refresh) if cfg.shuffle \
+                            else videos_refresh[(pl_idx + 1) % len(videos_refresh)]
+                        ok(f"Auto-avanço: {C.BOLD}{current_video.name}{C.NC}")
+                        backend.restart(current_video)
+                else:
+                    err("Stream encerrado.")
+                    break
+
+            _exit_flag.wait(0.3)
+    except KeyboardInterrupt:
+        cleanup()
+
+
+if __name__ == "__main__":
+    main()
