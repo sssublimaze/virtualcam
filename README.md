@@ -1,6 +1,6 @@
-# VirtualCam
+# VirtualCam 🎥
 
-**Câmera virtual universal** — transforma qualquer vídeo em uma webcam virtual no Linux e Windows.
+**Universal Virtual Camera** — turns any video into a virtual webcam on Linux and Windows.
 
 ```
  _    ___      __              ________
@@ -10,29 +10,29 @@
 |___/_/_/   \__/\__,_/\__,_/_/\____/\__,_/_/ /_/ /_/
 ```
 
-## Funcionalidades
+## Features
 
-- **Cross-platform** — Linux (v4l2loopback) e Windows (softcam / Unity Capture / OBS)
-- **Sem OBS Studio necessário** no Windows — usa softcam (MIT) ou Unity Capture (MIT)
-- **Playlist** — modo sequencial ou aleatório com auto-avanço
-- **Loop** — repetir vídeo infinitamente
-- **FPS configurável** — 1 a 120 quadros por segundo
-- **Overlay de texto** — texto personalizado sobre o vídeo
-- **Seletor gráfico de pasta** — tkinter nativo no Linux e Windows
-- **Hotkeys** — troque vídeo, pasta, resolução e FPS sem parar o stream
-- **Config persistente** — salva suas preferências em `~/.virtualcam/config.json`
-- **Modo CLI** — scripts e automação com argumentos de linha de comando
+- **Cross-platform** — Linux (v4l2loopback) and Windows (softcam / Unity Capture / OBS)
+- **No OBS Studio required** on Windows — uses softcam (MIT) or Unity Capture (MIT)
+- **Playlist** — sequential or random mode with auto-advance
+- **Loop** — infinite video replay
+- **Configurable FPS** — 1 to 120 frames per second
+- **Text overlay** — custom text on top of the video
+- **Graphical folder picker** — native tkinter dialog on Linux and Windows
+- **Hotkeys** — switch video, folder, resolution, and FPS without stopping the stream
+- **Persistent config** — saves preferences to `~/.virtualcam/config.json`
+- **CLI mode** — scripting and automation with command-line arguments
 
-## Instalação
+## Installation
 
 ### Linux
 
 ```bash
-# dependências do sistema
+# system dependencies
 sudo apt install ffmpeg v4l2loopback-dkms v4l2loopback-utils
 
-# clonar e executar
-git clone https://github.com/seuusuario/virtualcam.git
+# clone and run
+git clone https://github.com/yourusername/virtualcam.git
 cd virtualcam
 chmod +x virtualcam
 ./virtualcam
@@ -41,20 +41,20 @@ chmod +x virtualcam
 ### Windows
 
 ```bash
-# 1. Instalar ffmpeg (https://ffmpeg.org/download.html)
-# 2. Escolher um backend de câmera virtual:
+# 1. Install ffmpeg (https://ffmpeg.org/download.html)
+# 2. Pick a virtual camera backend:
 
-# Opção A — softcam (recomendado, MIT, sem OBS)
+# Option A — softcam (recommended, MIT, no OBS)
 pip install softcam numpy
-# Baixar driver: https://github.com/tshino/softcam
+# Download driver: https://github.com/tshino/softcam
 
-# Opção B — Unity Capture + pyvirtualcam (MIT, sem OBS)
+# Option B — Unity Capture + pyvirtualcam (MIT, no OBS)
 pip install pyvirtualcam numpy
-# Baixar e registrar: https://github.com/schellingb/UnityCapture
+# Download and register: https://github.com/schellingb/UnityCapture
 
-# Opção C — OBS Virtual Camera (fallback automático)
+# Option C — OBS Virtual Camera (automatic fallback)
 pip install pyvirtualcam numpy
-# Baixar plugin: https://obsproject.com
+# Download plugin: https://obsproject.com
 ```
 
 ### macOS
@@ -63,59 +63,59 @@ pip install pyvirtualcam numpy
 pip install pyvirtualcam numpy
 ```
 
-## Uso
+## Usage
 
-### Modo interativo
+### Interactive mode
 
 ```bash
 ./virtualcam
 ```
 
-1. Escolha a pasta com vídeos (explorador gráfico)
-2. Selecione a resolução
-3. Configure o FPS
-4. Escolha o vídeo
-5. Pronto! A câmera virtual está ativa
+1. Choose the video folder (native file dialog)
+2. Select resolution
+3. Set FPS
+4. Pick a video
+5. Done! The virtual camera is now active
 
-### Modo CLI
+### CLI mode
 
 ```bash
 ./virtualcam --dir ~/Videos --video video.mp4 --resolution 1920x1080 --fps 30 --loop --shuffle
 ```
 
-### Argumentos
+### Arguments
 
-| Argumento | Descrição |
-|-----------|-----------|
-| `-d, --dir DIR` | Pasta com vídeos |
-| `-v, --video VIDEO` | Arquivo de vídeo específico |
-| `-r, --resolution WxH` | Resolução (ex: `1920x1080`) |
-| `--fps FPS` | Quadros por segundo (1-120) |
-| `--loop` | Repetir vídeo |
-| `--no-loop` | Não repetir |
-| `--shuffle` | Modo aleatório |
-| `--overlay TEXTO` | Overlay de texto |
-| `--cli` | Modo CLI (sem menus interativos) |
-| `--list` | Listar vídeos da pasta |
-| `--devices` | Listar dispositivos de vídeo |
+| Argument | Description |
+|----------|-------------|
+| `-d, --dir DIR` | Video folder path |
+| `-v, --video VIDEO` | Specific video file |
+| `-r, --resolution WxH` | Resolution (e.g. `1920x1080`) |
+| `--fps FPS` | Frames per second (1-120) |
+| `--loop` | Loop video |
+| `--no-loop` | Don't loop |
+| `--shuffle` | Random mode |
+| `--overlay TEXT` | Text overlay |
+| `--cli` | CLI mode (no interactive menus) |
+| `--list` | List videos in folder |
+| `--devices` | List video devices |
 
 ## Hotkeys
 
-Durante a transmissão:
+While streaming:
 
-| Tecla | Ação |
-|-------|------|
-| `T` | Trocar vídeo (menu interativo) |
-| `N` | Próximo vídeo (modo shuffle) |
-| `L` | Alternar loop |
-| `P` | Trocar pasta (explorador gráfico) |
-| `F` | Alterar FPS |
-| `R` | Alterar resolução |
-| `Q` | Sair |
+| Key | Action |
+|-----|--------|
+| `T` | Switch video (interactive menu) |
+| `N` | Next video (shuffle mode) |
+| `L` | Toggle loop |
+| `P` | Change folder (graphical dialog) |
+| `F` | Change FPS |
+| `R` | Change resolution |
+| `Q` | Quit |
 
-## Configuração
+## ⚙ Configuration
 
-As configurações são salvas automaticamente em `~/.virtualcam/config.json`:
+Settings are automatically saved to `~/.virtualcam/config.json`:
 
 ```json
 {
@@ -130,7 +130,7 @@ As configurações são salvas automaticamente em `~/.virtualcam/config.json`:
 }
 ```
 
-## Arquitetura
+## Architecture
 
 ```
                    ┌──────────────────────┐
@@ -140,22 +140,22 @@ As configurações são salvas automaticamente em `~/.virtualcam/config.json`:
                           │
             ┌─────────────┴──────────────┐
             │                            │
-     ┌──────▼──────┐            ┌────────▼────────┐
+     ┌──────▼───────┐           ┌────────▼────────┐
      │   Linux      │           │    Windows      │
      │ v4l2loopback │           │ softcam /       │
      │ + ffmpeg     │           │ Unity Capture   │
-     │ (direto)     │           │ + ffmpeg (pipe) │
+     │ (direct)     │           │ + ffmpeg (pipe) │
      └──────────────┘           └─────────────────┘
 ```
 
 ### Linux
 
-O ffmpeg escreve diretamente no dispositivo v4l2loopback.
+ffmpeg writes directly to the v4l2loopback device.
 
 ### Windows
 
-O ffmpeg decodifica o vídeo e envia frames raw via pipe. O backend (softcam ou pyvirtualcam) lê do pipe e envia frame a frame para a câmera virtual registrada no sistema.
+ffmpeg decodes the video and pipes raw frames via stdout. The backend (softcam or pyvirtualcam) reads from the pipe and sends frames one by one to the virtual camera registered on the system.
 
-## Licença
+##  License
 
-MIT — sinta-se livre para usar, modificar e compartilhar.
+MIT — feel free to use, modify, and share.
