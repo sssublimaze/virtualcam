@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""virtualcam - Câmera virtual universal para Linux & Windows"""
 
 from __future__ import annotations
 
@@ -18,18 +17,14 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 
-# ────────────────────────────────────────────────────────
-# CONSTANTS
-# ────────────────────────────────────────────────────────
+
 CONFIG_DIR = Path.home() / ".virtualcam"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi", ".webm", ".gif", ".jpg", ".png")
 IS_LINUX = sys.platform == "linux"
 IS_WIN = sys.platform == "win32"
 
-# ────────────────────────────────────────────────────────
-# ANSI COLORS
-# ────────────────────────────────────────────────────────
+
 class C:
     BOLD = "\033[1m"
     DIM = "\033[2m"
@@ -74,9 +69,7 @@ class Config:
         return cls()
 
 
-# ────────────────────────────────────────────────────────
-# UI HELPERS  (com suporte a status bar persistente)
-# ────────────────────────────────────────────────────────
+
 _STATUS_ACTIVE = False
 _STATUS_FOOTER = ""
 _STATUS_LINES = 3  # blank + separator + hotkeys
@@ -126,9 +119,7 @@ def section(title, color=C.CYAN):
 def clear():
     print(C.CLEAR, end="")
 
-# ────────────────────────────────────────────────────────
-# BANNER
-# ────────────────────────────────────────────────────────
+
 BANNER_LINES = [
     " _    ___      __              ________              ",
     "| |  / (_)____/ /___  ______ _/ / ____/___ _____ ___ ",
@@ -147,9 +138,7 @@ def print_banner():
     print(f"  {C.DIM}{C.BLUE}└──────────────────────────────────────────────────────────┘{C.NC}")
     print()
 
-# ────────────────────────────────────────────────────────
-# GRAPHICAL FOLDER PICKER (cross-platform via tkinter)
-# ────────────────────────────────────────────────────────
+
 def open_folder_dialog(title="Escolha a pasta com seus vídeos", initialdir=None):
     try:
         import tkinter as tk
@@ -163,9 +152,7 @@ def open_folder_dialog(title="Escolha a pasta com seus vídeos", initialdir=None
     except Exception:
         return None
 
-# ────────────────────────────────────────────────────────
-# VIDEO SCANNER
-# ────────────────────────────────────────────────────────
+
 def scan_videos(directory):
     videos = []
     d = Path(directory)
@@ -193,9 +180,7 @@ def ffmpeg_pipe_cmd(video, width, height, fps, loop, overlay_text, overlay_pos):
         "-f", "rawvideo", "-", "-loglevel", "warning",
     ]
 
-# ────────────────────────────────────────────────────────
-# PLATFORM-SPECIFIC BACKENDS
-# ────────────────────────────────────────────────────────
+
 class VirtualCamBackend:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -396,9 +381,7 @@ class WindowsBackend(VirtualCamBackend):
         return self.start(video)
 
 
-# ────────────────────────────────────────────────────────
-# HOTKEY LISTENER  (queue-based, terminal-safe)
-# ────────────────────────────────────────────────────────
+
 _exit_flag = threading.Event()
 
 class HotkeyListener:
@@ -477,9 +460,7 @@ class HotkeyListener:
                 _exit_flag.wait(0.1)
 
 
-# ────────────────────────────────────────────────────────
-# INTERACTIVE MENUS
-# ────────────────────────────────────────────────────────
+
 def pick_folder_gui(cfg):
     """Abre explorador gráfico. Fallback para input() se tkinter falhar."""
     print()
